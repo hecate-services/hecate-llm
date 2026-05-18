@@ -1,0 +1,12 @@
+{application, report_llm_status, [
+    {description, "Periodic LLM status reports (CMD)"},
+    {vsn, "0.1.0"},
+    {registered, [report_llm_status]},
+    {mod, {report_llm_status_app, []}},
+    {applications, [
+        kernel, stdlib, crypto, llm, manage_providers, detect_llms
+    ]},
+    {env, []},
+    {modules, []},
+    {licenses, ["Apache-2.0"]}
+]}.

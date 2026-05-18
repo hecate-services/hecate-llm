@@ -1,0 +1,14 @@
+_build/
+_checkouts/
+.rebar3/
+rebar.lock
+erl_crash.dump
+rebar3.crashdump
+
+priv/data/
+priv/models/
+
+.idea/
+*.swp
+.DS_Store
+__pycache__/

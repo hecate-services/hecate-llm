@@ -1,0 +1,12 @@
+{application, detect_llms, [
+    {description, "Detect available LLM endpoints by polling providers (CMD)"},
+    {vsn, "0.1.0"},
+    {registered, [detect_llms]},
+    {mod, {detect_llms_app, []}},
+    {applications, [
+        kernel, stdlib, crypto, hackney, jsx, llm, manage_providers
+    ]},
+    {env, []},
+    {modules, []},
+    {licenses, ["Apache-2.0"]}
+]}.

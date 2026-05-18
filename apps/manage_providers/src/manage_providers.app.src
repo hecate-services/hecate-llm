@@ -1,0 +1,12 @@
+{application, manage_providers, [
+    {description, "LLM provider registry (Anthropic/OpenAI/Google/Ollama) (CMD)"},
+    {vsn, "0.1.0"},
+    {registered, [manage_providers]},
+    {mod, {manage_providers_app, []}},
+    {applications, [
+        kernel, stdlib, crypto, hackney, jsx, llm
+    ]},
+    {env, []},
+    {modules, []},
+    {licenses, ["Apache-2.0"]}
+]}.

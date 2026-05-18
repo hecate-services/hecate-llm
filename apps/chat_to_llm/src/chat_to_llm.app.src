@@ -1,0 +1,12 @@
+{application, chat_to_llm, [
+    {description, "Chat to LLM — single-turn unary RPC slice (CMD)"},
+    {vsn, "0.1.0"},
+    {registered, []},
+    {mod, {chat_to_llm_app, []}},
+    {applications, [
+        kernel, stdlib, crypto, hackney, jsx, llm
+    ]},
+    {env, []},
+    {modules, []},
+    {licenses, ["Apache-2.0"]}
+]}.

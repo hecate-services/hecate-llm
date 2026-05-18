@@ -1,0 +1,12 @@
+{application, get_available_llms_page, [
+    {description, "List detected LLM endpoints (QRY)"},
+    {vsn, "0.1.0"},
+    {registered, []},
+    {mod, {get_available_llms_page_app, []}},
+    {applications, [
+        kernel, stdlib, crypto, llm, manage_providers, detect_llms
+    ]},
+    {env, []},
+    {modules, []},
+    {licenses, ["Apache-2.0"]}
+]}.

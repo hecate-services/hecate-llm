@@ -1,0 +1,29 @@
+{application, hecate_llm, [
+    {description, "Realm-bound LLM serving over the mesh"},
+    {vsn, "0.1.0"},
+    {registered, []},
+    {mod, {hecate_llm_app, []}},
+    {applications, [
+        kernel, stdlib, crypto,
+        ssl, public_key, hackney, jsx,
+        cowboy,
+        reckon_db, reckon_gater, evoq, reckon_evoq,
+        hecate_om,
+        llm,
+        chat_to_llm,
+        stream_chat_with_llm,
+        manage_providers,
+        detect_llms,
+        check_llm_health,
+        get_available_llms_page,
+        report_llm_status,
+        track_llm_usage,
+        project_llm_usage
+    ]},
+    {env, []},
+    {modules, []},
+    {licenses, ["Apache-2.0"]},
+    {links, [
+        {"Codeberg", "https://codeberg.org/hecate-services/hecate-llm"}
+    ]}
+]}.

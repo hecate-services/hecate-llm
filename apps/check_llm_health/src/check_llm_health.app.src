@@ -1,0 +1,12 @@
+{application, check_llm_health, [
+    {description, "Probe LLM provider health (CMD)"},
+    {vsn, "0.1.0"},
+    {registered, []},
+    {mod, {check_llm_health_app, []}},
+    {applications, [
+        kernel, stdlib, crypto, hackney, jsx, llm, manage_providers
+    ]},
+    {env, []},
+    {modules, []},
+    {licenses, ["Apache-2.0"]}
+]}.

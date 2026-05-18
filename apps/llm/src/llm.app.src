@@ -1,0 +1,12 @@
+{application, llm, [
+    {description, "Shared notation + provider modules (Anthropic/OpenAI/Google/Ollama)"},
+    {vsn, "0.1.0"},
+    {registered, []},
+    {mod, {llm_app, []}},
+    {applications, [
+        kernel, stdlib, crypto, hackney, jsx, ssl, public_key, cowboy
+    ]},
+    {env, []},
+    {modules, []},
+    {licenses, ["Apache-2.0"]}
+]}.

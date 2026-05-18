@@ -1,0 +1,37 @@
+{
+  "name": "hecate-llm",
+  "display_name": "LLM",
+  "version": "0.1.0",
+  "description": "Realm-bound LLM serving over the mesh (Anthropic/OpenAI/Google/Ollama)",
+  "service_type": "container_daemon",
+  "tenancy": "realm",
+  "runs_on": "infrastructure_node",
+  "callback_module": "hecate_llm_service",
+  "image": "ghcr.io/hecate-services/hecate-llm",
+  "repository": "https://codeberg.org/hecate-services/hecate-llm",
+  "license": "Apache-2.0",
+  "depends_on": [
+    "macula-station",
+    "hecate-realm",
+    "hecate-om"
+  ],
+  "capabilities": [
+    "hecate-llm.chat",
+    "hecate-llm.stream_chat",
+    "hecate-llm.list_available",
+    "hecate-llm.check_health",
+    "hecate-llm.report_status",
+    "hecate-llm.track_usage"
+  ],
+  "ports": {
+    "health": 8470
+  },
+  "volumes": {
+    "secrets":         "/etc/hecate/secrets/hecate-llm",
+    "state":           "/var/lib/hecate-llm",
+    "station_socket":  "/run/macula"
+  },
+  "min_realm_version": "0.6.0",
+  "min_station_version": "0.1.0",
+  "min_om_version":     "0.1.0"
+}

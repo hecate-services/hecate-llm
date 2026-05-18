@@ -1,0 +1,12 @@
+{application, stream_chat_with_llm, [
+    {description, "Streaming chat with LLM — server-stream RPC slice (CMD)"},
+    {vsn, "0.1.0"},
+    {registered, []},
+    {mod, {stream_chat_with_llm_app, []}},
+    {applications, [
+        kernel, stdlib, crypto, hackney, jsx, macula, llm
+    ]},
+    {env, []},
+    {modules, []},
+    {licenses, ["Apache-2.0"]}
+]}.

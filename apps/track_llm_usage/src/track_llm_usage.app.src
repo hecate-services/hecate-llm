@@ -1,0 +1,12 @@
+{application, track_llm_usage, [
+    {description, "Track LLM call usage (cost, tokens) into an aggregate (CMD)"},
+    {vsn, "0.1.0"},
+    {registered, []},
+    {mod, {track_llm_usage_app, []}},
+    {applications, [
+        kernel, stdlib, crypto, reckon_db, evoq, llm
+    ]},
+    {env, []},
+    {modules, []},
+    {licenses, ["Apache-2.0"]}
+]}.
