@@ -9,7 +9,7 @@ FROM docker.io/erlang:27-alpine AS builder
 RUN apk add --no-cache git build-base
 
 WORKDIR /build
-COPY rebar.config rebar.lock ./
+COPY rebar.config ./
 COPY src ./src
 COPY apps ./apps
 COPY config ./config
