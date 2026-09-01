@@ -1,0 +1,58 @@
+[
+    {hecate_llm, [
+        {http_port,      8470},
+        {data_dir,       "/var/lib/hecate-llm/data"},
+        {event_store_id, llm_store}
+    ]},
+
+    {serve_llm, [
+        %% Preserved from the prior serve_llm app — provider defaults.
+        {ollama_url, "http://localhost:11434"}
+    ]},
+
+    {hecate_om, [
+        {service_cert_path, "/etc/hecate/secrets/service-cert.pem"},
+        {station_socket,    "/run/macula/station.sock"},
+        %% ${HECATE_REALM} substituted at boot (RELX_REPLACE_OS_VARS,
+        %% relx's `sys_config_src' mechanism -- see rebar.config). This
+        %% key was MISSING entirely before, on a plain (non-`.src')
+        %% sys.config with no substitution mechanism wired at all --
+        %% hecate_om_identity:load_realm/0 reads
+        %% application:get_env(hecate_om, realm), found nothing, and the
+        %% service would have booted dark, never actually joining the
+        %% mesh, regardless of what HECATE_REALM the deploy env set.
+        {realm, <<"${HECATE_REALM}">>},
+        %% MANDATORY because this service advertises capabilities (see
+        %% hecate_llm_service:capabilities/0 and hecate_llm_mesh_rpc's
+        %% own macula:advertise/5 calls). Without this,
+        %% hecate_om_identity:keypair/0 returns {error, no_keypair}
+        %% forever and capability advertisement silently no-ops on every
+        %% republish tick -- no crash, no error logged, the service
+        %% still connects and holds a valid realm (confirmed live in
+        %% this same verification run: {ok, no_keypair, ok}), so it
+        %% looks exactly like a healthy node while unreachable on the
+        %% mesh. Same bug class hecate-graph/hecate-mail/hecate-tube/
+        %% hecate-rag already hit -- see hecate-graph's own
+        %% sys.config.src for the identical line this mirrors. Path is
+        %% under the same persistent volume this app's own data_dir
+        %% above uses, so the keypair self-heals once (generated + saved
+        %% on first successful boot) and survives every restart after.
+        {identity_key_path, "/var/lib/hecate-llm/identity/keypair.erl.bin"},
+        %% Explicitly `undefined', not omitted: hecate_om.app.src bakes
+        %% in {health_port, 8470} as the APP'S OWN packaged default, so
+        %% simply leaving the key out of this sys.config does NOT clear
+        %% it -- sys.config only overrides keys it names, it doesn't
+        %% blank an app's own compiled-in defaults. Confirmed live:
+        %% application:get_env(hecate_om, health_port) still returned
+        %% {ok, 8470} with the key omitted entirely. hecate_llm_sup's
+        %% own cowboy listener (http_port above) already folds
+        %% `hecate_om_health_handler:routes()' into its dispatch table
+        %% alongside the `/api/v1/*' admin routes -- see its own
+        %% moduledoc ("serves /health + /api/v1/*") -- so hecate_om's
+        %% OWN separate listener for the exact same /health route is
+        %% pure duplication, and its default port (8470, see
+        %% hecate_om_health.erl's moduledoc) collides with this app's
+        %% own http_port default, failing as eaddrinuse on every boot.
+        {health_port, undefined}
+    ]}
+].
