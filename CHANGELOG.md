@@ -11,6 +11,11 @@ Versioning: [SemVer](https://semver.org/).
   from `NVIDIA_API_KEY` via `manage_providers:auto_detect_env_providers/1`.
   Verified live: `GET /v1/models` returns the expected `{"data": [...]}` shape
   against the account's own key, 83 models including several embedding models.
+- DeepSeek (OpenAI-compatible) wired the identical way, from
+  `DEEPSEEK_API_KEY` — the actual cost-driven default as of 2026-09-02
+  (superseding NVIDIA below), for hecate-graph's `narrate_hecate_llm`.
+  Same account/key already verified live elsewhere in this workspace
+  (`deepseek-v4-pro`).
 - Melious (EU-sovereign broker, OpenAI-compatible) wired the identical way,
   from `MELIOUS_API_KEY` — available for a caller that wants it specifically,
   but deliberately NOT provisioned with a key in this fleet's default deploy

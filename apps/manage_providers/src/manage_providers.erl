@@ -298,7 +298,7 @@ default_ollama_config() ->
 
 %% @doc Auto-detect providers from environment variables.
 %% Checks for OPENAI_API_KEY, ANTHROPIC_API_KEY, GOOGLE_API_KEY/GEMINI_API_KEY, GROQ_API_KEY,
-%% NVIDIA_API_KEY.
+%% NVIDIA_API_KEY, DEEPSEEK_API_KEY.
 %% Only adds providers not already configured.
 auto_detect_env_providers(Providers) ->
     %% Resolve Google/Gemini key: prefer GOOGLE_API_KEY, fall back to GEMINI_API_KEY
@@ -312,13 +312,21 @@ auto_detect_env_providers(Providers) ->
         {<<"google">>, GoogleEnvVar, google, "https://generativelanguage.googleapis.com"},
         %% Groq uses OpenAI-compatible API with function calling support
         {<<"groq">>, "GROQ_API_KEY", openai, "https://api.groq.com/openai"},
-        %% NVIDIA's hosted catalog (build.nvidia.com) is OpenAI-compatible too
+        %% NVIDIA's hosted catalog (build.nvidia.com) is OpenAI-compatible too.
+        %% Was this gateway's cost-driven default (free tier); superseded
+        %% 2026-09-02 by DeepSeek below -- cheap rather than free, but a
+        %% real paid tier isn't subject to a free tier's own rate limits/
+        %% deprecation risk. Stays wired and detected, just no longer the
+        %% default a caller gets when it doesn't ask for anything specific.
         {<<"nvidia">>, "NVIDIA_API_KEY", openai, "https://integrate.api.nvidia.com"},
+        %% DeepSeek (OpenAI-compatible) -- the actual cost-driven default
+        %% as of 2026-09-02 (see narrate_hecate_llm's own narrator_model
+        %% default in hecate-graph). Same account/key already verified
+        %% live elsewhere in this workspace (opencode.json, deepseek-v4-pro).
+        {<<"deepseek">>, "DEEPSEEK_API_KEY", openai, "https://api.deepseek.com"},
         %% Melious (EU-sovereign broker, OpenAI-compatible) -- wired for
         %% when a caller wants it specifically, but NOT provisioned with a
-        %% key in this fleet's default deploy secrets: NVIDIA's free tier
-        %% is today's cost-driven default for anything routed through this
-        %% gateway, Melious stays available rather than configured.
+        %% key in this fleet's default deploy secrets.
         {<<"melious">>, "MELIOUS_API_KEY", openai, "https://api.melious.ai"}
     ],
     lists:foldl(fun({Name, EnvVar, Type, Url}, Acc) ->
