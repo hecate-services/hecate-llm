@@ -22,8 +22,20 @@ health() ->
     ok.
 
 capabilities() ->
-    %% TODO: list capabilities this service exposes on the mesh.
-    [].
+    %% Bare discovery records (no `handler' key): these 5 unary methods are
+    %% actually served by hecate_llm_mesh_rpc's own macula:advertise/5 calls,
+    %% and hecate-llm.stream_chat by stream_chat_with_llm's
+    %% macula:advertise_stream/4 -- both predate, and stay outside, the
+    %% handler-based macula_response:advertise_direct/7 path this callback
+    %% would otherwise trigger. See hecate_om_service's own capability() doc.
+    [
+        #{name => <<"hecate-llm.chat">>,           version => 1},
+        #{name => <<"hecate-llm.stream_chat">>,    version => 1},
+        #{name => <<"hecate-llm.list_available">>, version => 1},
+        #{name => <<"hecate-llm.check_health">>,   version => 1},
+        #{name => <<"hecate-llm.report_status">>,  version => 1},
+        #{name => <<"hecate-llm.track_usage">>,    version => 1}
+    ].
 
 identity_spec() ->
     #{

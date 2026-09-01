@@ -7,6 +7,7 @@ rebar3.crashdump
 
 priv/data/
 priv/models/
+data/
 
 .idea/
 *.swp
