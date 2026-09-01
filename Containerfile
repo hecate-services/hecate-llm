@@ -44,7 +44,18 @@ RUN rebar3 as prod tar
 #----------------------------------------------------------------------
 # Stage 2 — runtime: slim image, just the release tarball
 #----------------------------------------------------------------------
-FROM docker.io/alpine:3.20
+# MUST match the builder's OWN Alpine base (erlang:27-alpine ships Alpine
+# 3.22.5, confirmed live via `docker run erlang:27-alpine cat
+# /etc/alpine-release`), not an independently-picked version. Erlang's
+# `crypto` app dlopen's the SYSTEM libcrypto/libssl at boot rather than
+# bundling its own (even with relx's include_erts:true, which only
+# embeds ERTS itself) -- confirmed live on the actual beam00 deploy
+# target, not just locally: 3.20's older OpenSSL is missing a symbol
+# (EVP_MD_CTX_get_size_ex) the crypto NIF built against 3.22's newer one
+# needs, so `kernel` itself fails application on_load and the whole
+# release crash-loops before ever reaching macula_om's own logging, let
+# alone advertising a single capability.
+FROM docker.io/alpine:3.22
 
 # zstd-libs/snappy/lz4-libs: the RUNTIME shared libraries for rocksdb's
 # compression backends, compiled against in the builder stage above via
