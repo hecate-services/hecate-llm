@@ -26,7 +26,7 @@ Layer 1 — identity    hecate-realm
 Layer 0 — kernel      macula-station
 ```
 
-Substrate: [`hecate-om`](https://codeberg.org/hecate-services/hecate-om).
+Substrate: [`hecate-om`](https://github.com/hecate-services/hecate-om).
 
 ## Capabilities
 
@@ -68,7 +68,7 @@ mounted by the Quadlet, never in the realm-cert directory.
 
 ## Deps
 
-- [`hecate-om`](https://codeberg.org/hecate-services/hecate-om) — service substrate
+- [`hecate-om`](https://github.com/hecate-services/hecate-om) — service substrate
 - `hackney` + `jsx` — outbound HTTPS to provider APIs
 - `cowboy` — local HTTP (`/health` + `/api/v1/*` admin)
 - `reckon_db` + `evoq` + `reckon_evoq` — event-sourced usage aggregate

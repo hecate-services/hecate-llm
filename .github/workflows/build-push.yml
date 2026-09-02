@@ -1,9 +1,7 @@
 # Build the OCI image for hecate-llm and push to ghcr.io.
 # Triggered on push to main and on tag pushes.
 #
-# Drop this into .github/workflows/build-push.yml (the GitHub mirror
-# runs this; Codeberg has Forgejo Actions disabled per the migration
-# pattern).
+# Runs on GitHub Actions.
 
 name: build-and-push
 

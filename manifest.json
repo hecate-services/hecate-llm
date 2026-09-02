@@ -8,7 +8,7 @@
   "runs_on": "infrastructure_node",
   "callback_module": "hecate_llm_service",
   "image": "ghcr.io/hecate-services/hecate-llm",
-  "repository": "https://codeberg.org/hecate-services/hecate-llm",
+  "repository": "https://github.com/hecate-services/hecate-llm",
   "license": "Apache-2.0",
   "depends_on": [
     "macula-station",

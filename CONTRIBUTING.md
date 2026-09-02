@@ -7,4 +7,4 @@ rebar3 compile
 rebar3 ct
 ```
 
-Issues: https://codeberg.org/hecate-services/hecate-llm/issues
+Issues: https://github.com/hecate-services/hecate-llm/issues

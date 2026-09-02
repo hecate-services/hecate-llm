@@ -24,6 +24,6 @@
     {modules, []},
     {licenses, ["Apache-2.0"]},
     {links, [
-        {"Codeberg", "https://codeberg.org/hecate-services/hecate-llm"}
+        {"GitHub", "https://github.com/hecate-services/hecate-llm"}
     ]}
 ]}.
