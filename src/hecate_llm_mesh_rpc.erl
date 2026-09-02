@@ -100,7 +100,7 @@ route(<<"hecate-llm.list_available">>, _P) ->
 
 route(<<"hecate-llm.check_health">>, _P) ->
     case erlang:function_exported(check_llm_health, check_all, 0) of
-        true  -> {ok, check_llm_health:check_all()};
+        true  -> {ok, wire_safe_health(check_llm_health:check_all())};
         false -> {error, not_implemented}
     end;
 
@@ -122,3 +122,21 @@ route(<<"hecate-llm.track_usage">>, P) ->
 
 route(Other, _P) ->
     {error, {unknown_method, Other}}.
+
+%% check_llm_health:check_all/0's own contract is `ok | {error, term()}'
+%% per provider (see llm_provider:health/1's `-callback') -- a fine
+%% internal shape, but `{error, Reason}' is a bare 2-tuple, which
+%% macula_frame:check_value/2 rejects outright ("tuple at ... cannot be
+%% encoded"), whatever Reason is. Every provider's health check faults
+%% the whole call the moment one of them (ollama, always present per
+%% manage_providers' own default) is down, which it always is in this
+%% deploy. Normalize to the same status/reason map shape
+%% hecate_om_health_handler already uses.
+wire_safe_health(Results) ->
+    maps:map(fun(_Name, Status) -> wire_safe_status(Status) end, Results).
+
+wire_safe_status(ok) ->
+    <<"ok">>;
+wire_safe_status({error, Reason}) ->
+    #{status => <<"error">>,
+      reason => iolist_to_binary(io_lib:format("~p", [Reason]))}.

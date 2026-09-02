@@ -5,6 +5,28 @@ Versioning: [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- `hecate-llm.check_health` faulted every real mesh call —
+  `macula_peering`/`macula_station_link` logged "tuple at payload.ollama
+  cannot be encoded" and returned `unknown_error` to the caller.
+  `check_llm_health:check_all/0`'s own contract is `ok | {error, term()}`
+  per provider (a fine internal shape — see `llm_provider:health/1`'s
+  `-callback`), but `route/2` returned that map verbatim as the RPC
+  payload; `{error, Reason}` is a bare 2-tuple, which
+  `macula_frame:check_value/2` rejects outright, and ollama (always
+  present, per `manage_providers`' own default) is never running in
+  this deploy, so every real call hit it. `wire_safe_health/1` now
+  normalizes each provider's status to the same `status`/`reason` map
+  shape `hecate_om_health_handler` already uses (`ok` stays the bare
+  atom `<<"ok">>`). Found live: mesh advertisement and routing both
+  worked correctly (six capabilities, correct realm, confirmed via the
+  DHT's own `procedure_advertisement` records) — this was the first
+  bug in the actual call path, not identity/advertise. New regression
+  test (`check_health_wire_safe`, 6 total) asserts no value in the
+  response map is ever a tuple; verified RED against the unfixed
+  handler (a real, uncaught `is_tuple` failure, not just an
+  `undef`/loading artifact) before confirming GREEN.
+
 ### Added
 - NVIDIA's hosted catalog (build.nvidia.com / `integrate.api.nvidia.com`) as an
   auto-detected provider, same pattern as Groq: OpenAI-compatible, picked up
