@@ -54,18 +54,17 @@ procedure() ->
 %% non-streaming chat slice keep working.
 init([]) ->
     case {hecate_om:macula_client(), hecate_om_identity:realm()} of
-        {{ok, Pool}, {ok, Realm}} ->
-            try
-                _ = macula:advertise_stream(
-                        Pool, Realm, procedure(),
-                        fun ?MODULE:handle/2),
-                ok
-            catch _:_ -> ok
-            end;
-        _ ->
-            ok
+        {{ok, Pool}, {ok, Realm}} -> advertise_stream_safe(Pool, Realm);
+        _                         -> ok
     end,
     {ok, #{}}.
+
+advertise_stream_safe(Pool, Realm) ->
+    try
+        _ = macula:advertise_stream(Pool, Realm, procedure(), fun ?MODULE:handle/2),
+        ok
+    catch _:_ -> ok
+    end.
 
 handle_call(_Request, _From, State) -> {reply, {error, unknown_call}, State}.
 handle_cast(_Msg, State) -> {noreply, State}.

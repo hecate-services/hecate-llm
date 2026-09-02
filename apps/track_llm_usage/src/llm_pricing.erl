@@ -66,32 +66,30 @@ calculate_cost(Model, TokensIn, TokensOut) ->
 %% @doc Extract token counts from an LLM response.
 -spec extract_tokens(map()) -> {non_neg_integer(), non_neg_integer()}.
 extract_tokens(Response) when is_map(Response) ->
-    case maps:get(<<"usage">>, Response, undefined) of
-        undefined ->
-            case maps:get(usage, Response, undefined) of
-                undefined -> {0, 0};
-                Usage -> extract_from_usage(Usage)
-            end;
-        Usage ->
-            extract_from_usage(Usage)
-    end.
+    usage_tokens(maps:get(<<"usage">>, Response, undefined), maps:get(usage, Response, undefined)).
+
+usage_tokens(undefined, undefined) -> {0, 0};
+usage_tokens(undefined, Usage)     -> extract_from_usage(Usage);
+usage_tokens(Usage, _AtomUsage)    -> extract_from_usage(Usage).
 
 %%% Internal
 
 get_pricing(Model) when is_binary(Model) ->
     case maps:get(Model, ?PRICING, undefined) of
-        undefined ->
-            case find_pricing_by_prefix(Model) of
-                undefined ->
-                    case is_ollama_model(Model) of
-                        true -> {0.0, 0.0};
-                        false -> maps:get(default, ?PRICING)
-                    end;
-                Pricing ->
-                    Pricing
-            end;
-        Pricing ->
-            Pricing
+        undefined -> pricing_by_prefix_or_default(Model);
+        Pricing   -> Pricing
+    end.
+
+pricing_by_prefix_or_default(Model) ->
+    case find_pricing_by_prefix(Model) of
+        undefined -> pricing_for_unknown_model(Model);
+        Pricing   -> Pricing
+    end.
+
+pricing_for_unknown_model(Model) ->
+    case is_ollama_model(Model) of
+        true  -> {0.0, 0.0};
+        false -> maps:get(default, ?PRICING)
     end.
 
 find_pricing_by_prefix(Model) ->
@@ -129,12 +127,10 @@ is_ollama_model(Model) ->
         <<"starcoder">>, <<"wizard">>, <<"vicuna">>, <<"orca">>,
         <<"neural">>, <<"dolphin">>, <<"nous">>
     ],
-    lists:any(fun(Pattern) ->
-        case binary:match(string:lowercase(Model), Pattern) of
-            nomatch -> false;
-            _ -> true
-        end
-    end, OllamaPatterns).
+    lists:any(fun(Pattern) -> matches_lowercase(Model, Pattern) end, OllamaPatterns).
+
+matches_lowercase(Model, Pattern) ->
+    binary:match(string:lowercase(Model), Pattern) =/= nomatch.
 
 extract_from_usage(Usage) when is_map(Usage) ->
     PromptTokens = get_usage_field(Usage, [<<"prompt_tokens">>, prompt_tokens, <<"input_tokens">>, input_tokens]),

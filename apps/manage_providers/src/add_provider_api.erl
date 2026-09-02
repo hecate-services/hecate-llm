@@ -18,28 +18,28 @@ init(Req0, State) ->
 
 handle_post(Req0, _State) ->
     case hecate_api_utils:read_json_body(Req0) of
-        {ok, Params, Req1} ->
-            Name = hecate_api_utils:get_field(name, Params),
-            TypeBin = hecate_api_utils:get_field(type, Params),
-            ApiKey = hecate_api_utils:get_field(api_key, Params, <<>>),
-            Url = hecate_api_utils:get_field(url, Params, <<>>),
-
-            case validate_add_provider(Name, TypeBin) of
-                {ok, Type} ->
-                    Config = build_provider_config(Type, ApiKey, Url),
-                    case manage_providers:add(Name, Type, Config) of
-                        ok ->
-                            manage_providers:refresh_models(),
-                            hecate_api_utils:json_ok(#{}, Req1);
-                        {error, Reason} ->
-                            hecate_api_utils:bad_request(Reason, Req1)
-                    end;
-                {error, Reason} ->
-                    hecate_api_utils:bad_request(Reason, Req1)
-            end;
-        {error, invalid_json, Req1} ->
-            hecate_api_utils:bad_request(<<"Invalid JSON">>, Req1)
+        {ok, Params, Req1}          -> handle_parsed_add(Params, Req1);
+        {error, invalid_json, Req1} -> hecate_api_utils:bad_request(<<"Invalid JSON">>, Req1)
     end.
+
+handle_parsed_add(Params, Req1) ->
+    Name = hecate_api_utils:get_field(name, Params),
+    TypeBin = hecate_api_utils:get_field(type, Params),
+    ApiKey = hecate_api_utils:get_field(api_key, Params, <<>>),
+    Url = hecate_api_utils:get_field(url, Params, <<>>),
+    dispatch_add(validate_add_provider(Name, TypeBin), Name, ApiKey, Url, Req1).
+
+dispatch_add({ok, Type}, Name, ApiKey, Url, Req1) ->
+    Config = build_provider_config(Type, ApiKey, Url),
+    finish_add(manage_providers:add(Name, Type, Config), Req1);
+dispatch_add({error, Reason}, _Name, _ApiKey, _Url, Req1) ->
+    hecate_api_utils:bad_request(Reason, Req1).
+
+finish_add(ok, Req1) ->
+    manage_providers:refresh_models(),
+    hecate_api_utils:json_ok(#{}, Req1);
+finish_add({error, Reason}, Req1) ->
+    hecate_api_utils:bad_request(Reason, Req1).
 
 validate_add_provider(undefined, _) ->
     {error, <<"name is required">>};

@@ -47,19 +47,17 @@ terminate(_, _) -> ok.
 
 advertise_all() ->
     case {hecate_om:macula_client(), hecate_om_identity:realm()} of
-        {{ok, Pool}, {ok, Realm}} ->
-            lists:foreach(
-                fun({Cap, Fun}) ->
-                    try
-                        ok = macula:advertise(Pool, Realm, Cap,
-                                              {?MODULE, Fun}, #{})
-                    catch _:_ -> ok
-                    end
-                end,
-                handler_table()
-            );
-        _ ->
-            ok
+        {{ok, Pool}, {ok, Realm}} -> advertise_capabilities(Pool, Realm);
+        _                         -> ok
+    end.
+
+advertise_capabilities(Pool, Realm) ->
+    lists:foreach(fun(CapFun) -> advertise_one(Pool, Realm, CapFun) end, handler_table()).
+
+advertise_one(Pool, Realm, {Cap, Fun}) ->
+    try
+        ok = macula:advertise(Pool, Realm, Cap, {?MODULE, Fun}, #{})
+    catch _:_ -> ok
     end.
 
 handler_table() ->
@@ -111,17 +109,19 @@ route(<<"hecate-llm.report_status">>, _P) ->
 
 route(<<"hecate-llm.track_usage">>, P) ->
     case track_llm_call_v1:from_map(P) of
-        {ok, Cmd} ->
-            case maybe_track_llm_call:dispatch(Cmd) of
-                ok                  -> {ok, #{status => accepted}};
-                {ok, Result}        -> {ok, Result};
-                {error, _} = E      -> E
-            end;
+        {ok, Cmd}      -> dispatch_track_usage(Cmd);
         {error, _} = E -> E
     end;
 
 route(Other, _P) ->
     {error, {unknown_method, Other}}.
+
+dispatch_track_usage(Cmd) ->
+    case maybe_track_llm_call:dispatch(Cmd) of
+        ok                  -> {ok, #{status => accepted}};
+        {ok, Result}        -> {ok, Result};
+        {error, _} = E      -> E
+    end.
 
 %% check_llm_health:check_all/0's own contract is `ok | {error, term()}'
 %% per provider (see llm_provider:health/1's `-callback') -- a fine

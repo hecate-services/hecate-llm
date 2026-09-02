@@ -23,6 +23,9 @@ routes_for_app(App) ->
 
 routes_for_module(Mod) ->
     case erlang:function_exported(Mod, routes, 0) of
-        true  -> try Mod:routes() catch _:_ -> [] end;
+        true  -> safe_routes(Mod);
         false -> []
     end.
+
+safe_routes(Mod) ->
+    try Mod:routes() catch _:_ -> [] end.

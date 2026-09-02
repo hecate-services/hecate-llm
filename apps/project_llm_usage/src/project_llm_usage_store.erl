@@ -76,13 +76,16 @@ terminate(_Reason, _State) ->
 
 sum_cost_by(Field, Value) ->
     All = ets:tab2list(?TABLE),
-    lists:foldl(fun({_Key, Entry}, Acc) ->
-        case maps:get(Field, Entry, undefined) of
-            Value2 when Value2 =:= Value ->
-                case maps:get(cost_usd, Entry, 0.0) of
-                    C when is_number(C) -> Acc + C;
-                    _ -> Acc
-                end;
-            _ -> Acc
-        end
-    end, 0.0, All).
+    lists:foldl(fun(Entry, Acc) -> add_matching_cost(Field, Value, Entry, Acc) end, 0.0, All).
+
+add_matching_cost(Field, Value, {_Key, Entry}, Acc) ->
+    case maps:get(Field, Entry, undefined) of
+        Value2 when Value2 =:= Value -> Acc + numeric_cost(Entry);
+        _ -> Acc
+    end.
+
+numeric_cost(Entry) ->
+    case maps:get(cost_usd, Entry, 0.0) of
+        C when is_number(C) -> C;
+        _ -> 0.0
+    end.

@@ -217,18 +217,21 @@ stream_loop(ClientRef, Ref, Caller, Buffer) ->
         {hackney_response, ClientRef, done} ->
             Caller ! {llm_done, Ref};
         {hackney_response, ClientRef, Chunk} when is_binary(Chunk) ->
-            NewBuffer = <<Buffer/binary, Chunk/binary>>,
-            {Events, Rest} = parse_sse(NewBuffer),
-            lists:foreach(fun(EventData) ->
-                process_sse_event(EventData, Ref, Caller)
-            end, Events),
-            stream_loop(ClientRef, Ref, Caller, Rest);
+            handle_sse_chunk(Chunk, ClientRef, Ref, Caller, Buffer);
         {hackney_response, ClientRef, {error, Reason}} ->
             Caller ! {llm_error, Ref, Reason}
     after 120000 ->
         Caller ! {llm_error, Ref, timeout},
         hackney:close(ClientRef)
     end.
+
+handle_sse_chunk(Chunk, ClientRef, Ref, Caller, Buffer) ->
+    NewBuffer = <<Buffer/binary, Chunk/binary>>,
+    {Events, Rest} = parse_sse(NewBuffer),
+    lists:foreach(fun(EventData) ->
+        process_sse_event(EventData, Ref, Caller)
+    end, Events),
+    stream_loop(ClientRef, Ref, Caller, Rest).
 
 process_sse_event(Data, Ref, Caller) ->
     try json:decode(Data) of

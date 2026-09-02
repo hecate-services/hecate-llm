@@ -13,12 +13,13 @@ method_not_allowed(Req)   -> reply_json(405, #{error => <<"method_not_allowed">>
 
 read_json_body(Req0) ->
     case cowboy_req:read_body(Req0) of
-        {ok, Body, Req1} when byte_size(Body) > 0 ->
-            try {ok, jsx:decode(Body, [return_maps]), Req1}
-            catch _:_ -> {error, invalid_json, Req1}
-            end;
-        {ok, _Empty, Req1} ->
-            {ok, #{}, Req1}
+        {ok, Body, Req1} when byte_size(Body) > 0 -> decode_json_body(Body, Req1);
+        {ok, _Empty, Req1}                        -> {ok, #{}, Req1}
+    end.
+
+decode_json_body(Body, Req1) ->
+    try {ok, jsx:decode(Body, [return_maps]), Req1}
+    catch _:_ -> {error, invalid_json, Req1}
     end.
 
 get_field(Key, Params) -> get_field(Key, Params, undefined).

@@ -131,10 +131,7 @@ tool_call_to_ollama(TC) ->
     Name = get_field(name, <<"name">>, TC, <<>>),
     Args = get_field(arguments, <<"arguments">>, TC, #{}),
     %% Ollama expects arguments as a JSON object, not a string
-    ArgsMap = case is_binary(Args) of
-        true -> try json:decode(Args) catch _:_ -> #{} end;
-        false -> Args
-    end,
+    ArgsMap = decode_if_binary(Args),
     #{
         id => Id,
         type => <<"function">>,
@@ -143,6 +140,9 @@ tool_call_to_ollama(TC) ->
             arguments => ArgsMap
         }
     }.
+
+decode_if_binary(Args) when is_binary(Args) -> try json:decode(Args) catch _:_ -> #{} end;
+decode_if_binary(Args) -> Args.
 
 %% Get a field by atom key first, then binary key fallback
 get_field(AtomKey, BinKey, Map, Default) ->
@@ -238,18 +238,21 @@ stream_loop(ClientRef, Ref, Caller, Buffer) ->
         {hackney_response, ClientRef, done} ->
             Caller ! {llm_done, Ref};
         {hackney_response, ClientRef, Chunk} when is_binary(Chunk) ->
-            NewBuffer = <<Buffer/binary, Chunk/binary>>,
-            {Parsed, Rest} = parse_ndjson(NewBuffer),
-            lists:foreach(fun(ChunkMap) ->
-                Caller ! {llm_chunk, Ref, normalize_stream_chunk(ChunkMap)}
-            end, Parsed),
-            stream_loop(ClientRef, Ref, Caller, Rest);
+            handle_ndjson_chunk(Chunk, ClientRef, Ref, Caller, Buffer);
         {hackney_response, ClientRef, {error, Reason}} ->
             Caller ! {llm_error, Ref, Reason}
     after 120000 ->
         Caller ! {llm_error, Ref, timeout},
         hackney:close(ClientRef)
     end.
+
+handle_ndjson_chunk(Chunk, ClientRef, Ref, Caller, Buffer) ->
+    NewBuffer = <<Buffer/binary, Chunk/binary>>,
+    {Parsed, Rest} = parse_ndjson(NewBuffer),
+    lists:foreach(fun(ChunkMap) ->
+        Caller ! {llm_chunk, Ref, normalize_stream_chunk(ChunkMap)}
+    end, Parsed),
+    stream_loop(ClientRef, Ref, Caller, Rest).
 
 parse_ndjson(Buffer) ->
     Lines = binary:split(Buffer, <<"\n">>, [global]),

@@ -61,41 +61,37 @@ terminate(_Reason, #state{timer_ref = TimerRef}) ->
 
 do_poll(#state{known_models = KnownModels} = State) ->
     case poll_local_providers() of
-        {ok, CurrentModels} ->
-            CurrentMap = models_to_map(CurrentModels),
-            NewModels = maps:without(maps:keys(KnownModels), CurrentMap),
-            RemovedNames = maps:keys(KnownModels) -- maps:keys(CurrentMap),
-
-            maps:foreach(fun(Name, Info) ->
-                emit_detected(Name, Info)
-            end, NewModels),
-
-            lists:foreach(fun(Name) ->
-                emit_removed(Name)
-            end, RemovedNames),
-
-            State#state{known_models = CurrentMap};
-        {error, _Reason} ->
-            State
+        {ok, CurrentModels} -> apply_poll_result(CurrentModels, KnownModels, State);
+        {error, _Reason}    -> State
     end.
+
+apply_poll_result(CurrentModels, KnownModels, State) ->
+    CurrentMap = models_to_map(CurrentModels),
+    NewModels = maps:without(maps:keys(KnownModels), CurrentMap),
+    RemovedNames = maps:keys(KnownModels) -- maps:keys(CurrentMap),
+    maps:foreach(fun emit_detected/2, NewModels),
+    lists:foreach(fun emit_removed/1, RemovedNames),
+    State#state{known_models = CurrentMap}.
 
 %% @doc Only poll providers with type=ollama (local inference).
 poll_local_providers() ->
     Providers = manage_providers:list(),
-    LocalModels = maps:fold(fun(_Name, #{type := ollama} = Config, Acc) ->
-        case maps:get(enabled, Config, true) of
-            true ->
-                case ollama_provider:list_models(Config) of
-                    {ok, Models} -> Acc ++ Models;
-                    {error, _} -> Acc
-                end;
-            false ->
-                Acc
-        end;
-    (_Name, _Config, Acc) ->
-        Acc
-    end, [], Providers),
+    LocalModels = maps:fold(fun accumulate_local_models/3, [], Providers),
     {ok, LocalModels}.
+
+accumulate_local_models(_Name, #{type := ollama} = Config, Acc) ->
+    case maps:get(enabled, Config, true) of
+        true  -> Acc ++ local_models(Config);
+        false -> Acc
+    end;
+accumulate_local_models(_Name, _Config, Acc) ->
+    Acc.
+
+local_models(Config) ->
+    case ollama_provider:list_models(Config) of
+        {ok, Models} -> Models;
+        {error, _}   -> []
+    end.
 
 models_to_map(Models) ->
     lists:foldl(fun(Model, Acc) ->

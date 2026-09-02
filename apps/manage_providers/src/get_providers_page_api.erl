@@ -17,16 +17,17 @@ init(Req0, State) ->
 handle_get(Req0, _State) ->
     Providers = manage_providers:list(),
     %% Convert to JSON-safe format (atoms to binaries)
-    JsonProviders = maps:map(fun(_Name, Config) ->
-        Type = maps:get(type, Config, unknown),
-        Base = #{
-            type => atom_to_binary(Type, utf8),
-            enabled => maps:get(enabled, Config, true)
-        },
-        case maps:get(url, Config, undefined) of
-            undefined -> Base;
-            Url when is_list(Url) -> Base#{url => list_to_binary(Url)};
-            Url -> Base#{url => Url}
-        end
-    end, Providers),
+    JsonProviders = maps:map(fun(_Name, Config) -> json_safe_provider(Config) end, Providers),
     hecate_api_utils:json_ok(#{providers => JsonProviders}, Req0).
+
+json_safe_provider(Config) ->
+    Type = maps:get(type, Config, unknown),
+    Base = #{
+        type => atom_to_binary(Type, utf8),
+        enabled => maps:get(enabled, Config, true)
+    },
+    maybe_add_url(Base, maps:get(url, Config, undefined)).
+
+maybe_add_url(Base, undefined)              -> Base;
+maybe_add_url(Base, Url) when is_list(Url)  -> Base#{url => list_to_binary(Url)};
+maybe_add_url(Base, Url)                    -> Base#{url => Url}.

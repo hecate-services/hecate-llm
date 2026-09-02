@@ -57,18 +57,19 @@ terminate(_Reason, #state{timer_ref = TimerRef}) ->
 
 check_and_report(BaseUrl) ->
     case fetch_running_models(BaseUrl) of
-        {ok, RunningModels} ->
-            RunningMap = running_models_to_map(RunningModels),
-            %% Also get all available models
-            case fetch_available_models(BaseUrl) of
-                {ok, AllModels} ->
-                    report_all_statuses(AllModels, RunningMap);
-                {error, _} ->
-                    %% Can't get model list, report running ones only
-                    report_running_statuses(RunningMap)
-            end;
+        {ok, RunningModels} -> report_with_running_models(BaseUrl, RunningModels);
+        {error, _}          -> ok
+    end.
+
+report_with_running_models(BaseUrl, RunningModels) ->
+    RunningMap = running_models_to_map(RunningModels),
+    %% Also get all available models
+    case fetch_available_models(BaseUrl) of
+        {ok, AllModels} ->
+            report_all_statuses(AllModels, RunningMap);
         {error, _} ->
-            ok
+            %% Can't get model list, report running ones only
+            report_running_statuses(RunningMap)
     end.
 
 fetch_running_models(BaseUrl) ->

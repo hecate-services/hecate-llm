@@ -141,48 +141,46 @@ tool_to_gemini_schema(#{<<"name">> := Name, <<"description">> := Desc, <<"input_
 
 %% Normalize JSON schema for Gemini (type must be uppercase)
 normalize_schema(Schema) when is_map(Schema) ->
-    %% Convert type to uppercase (remove old key, add new)
-    Schema1 = case maps:get(<<"type">>, Schema, undefined) of
-        undefined ->
-            case maps:get(type, Schema, undefined) of
-                undefined -> Schema;
-                Type ->
-                    S = maps:remove(type, Schema),
-                    S#{type => string:uppercase(ensure_binary(Type))}
-            end;
-        Type ->
-            S = maps:remove(<<"type">>, Schema),
-            S#{type => string:uppercase(ensure_binary(Type))}
-    end,
-    %% Recursively normalize properties
-    Schema2 = case maps:get(<<"properties">>, Schema1, undefined) of
-        undefined ->
-            case maps:get(properties, Schema1, undefined) of
-                undefined -> Schema1;
-                Props when is_map(Props) ->
-                    NormalizedProps = maps:map(fun(_K, V) -> normalize_schema(V) end, Props),
-                    S2 = maps:remove(properties, Schema1),
-                    S2#{properties => NormalizedProps}
-            end;
-        Props when is_map(Props) ->
-            NormalizedProps = maps:map(fun(_K, V) -> normalize_schema(V) end, Props),
-            S2 = maps:remove(<<"properties">>, Schema1),
-            S2#{properties => NormalizedProps}
-    end,
-    %% Also normalize required array
-    case maps:get(<<"required">>, Schema2, undefined) of
-        undefined ->
-            case maps:get(required, Schema2, undefined) of
-                undefined -> Schema2;
-                Req ->
-                    S3 = maps:remove(required, Schema2),
-                    S3#{required => Req}
-            end;
-        Req ->
-            S3 = maps:remove(<<"required">>, Schema2),
-            S3#{required => Req}
-    end;
+    Schema1 = normalize_type(Schema),
+    Schema2 = normalize_properties(Schema1),
+    normalize_required(Schema2);
 normalize_schema(Other) -> Other.
+
+%% Convert type to uppercase (remove old key, add new)
+normalize_type(Schema) ->
+    apply_type(maps:get(<<"type">>, Schema, undefined), maps:get(type, Schema, undefined), Schema).
+
+apply_type(undefined, undefined, Schema) ->
+    Schema;
+apply_type(undefined, Type, Schema) ->
+    (maps:remove(type, Schema))#{type => string:uppercase(ensure_binary(Type))};
+apply_type(BinType, _AtomType, Schema) ->
+    (maps:remove(<<"type">>, Schema))#{type => string:uppercase(ensure_binary(BinType))}.
+
+%% Recursively normalize properties
+normalize_properties(Schema) ->
+    apply_properties(maps:get(<<"properties">>, Schema, undefined), maps:get(properties, Schema, undefined), Schema).
+
+apply_properties(undefined, undefined, Schema) ->
+    Schema;
+apply_properties(undefined, Props, Schema) when is_map(Props) ->
+    (maps:remove(properties, Schema))#{properties => normalize_props_map(Props)};
+apply_properties(BinProps, _AtomProps, Schema) when is_map(BinProps) ->
+    (maps:remove(<<"properties">>, Schema))#{properties => normalize_props_map(BinProps)}.
+
+normalize_props_map(Props) ->
+    maps:map(fun(_K, V) -> normalize_schema(V) end, Props).
+
+%% Also normalize required array
+normalize_required(Schema) ->
+    apply_required(maps:get(<<"required">>, Schema, undefined), maps:get(required, Schema, undefined), Schema).
+
+apply_required(undefined, undefined, Schema) ->
+    Schema;
+apply_required(undefined, Req, Schema) ->
+    (maps:remove(required, Schema))#{required => Req};
+apply_required(BinReq, _AtomReq, Schema) ->
+    (maps:remove(<<"required">>, Schema))#{required => BinReq}.
 
 ensure_binary(B) when is_binary(B) -> B;
 ensure_binary(L) when is_list(L) -> list_to_binary(L);
@@ -257,13 +255,13 @@ is_dated_preview(Name) ->
         {Pos, Len} ->
             After = binary:part(Name, Pos + Len, byte_size(Name) - Pos - Len),
             %% If what follows starts with a digit, it's a dated preview
-            case After of
-                <<C, _/binary>> when C >= $0, C =< $9 -> true;
-                _ -> false
-            end;
+            starts_with_digit(After);
         nomatch ->
             false
     end.
+
+starts_with_digit(<<C, _/binary>>) when C >= $0, C =< $9 -> true;
+starts_with_digit(_) -> false.
 
 normalize_response(#{<<"candidates">> := [Candidate | _]} = Resp) ->
     Content = maps:get(<<"content">>, Candidate, #{}),
@@ -330,12 +328,7 @@ stream_loop(ClientRef, Ref, Caller, Buffer) ->
         {hackney_response, ClientRef, done} ->
             Caller ! {llm_done, Ref};
         {hackney_response, ClientRef, Chunk} when is_binary(Chunk) ->
-            NewBuffer = <<Buffer/binary, Chunk/binary>>,
-            {Events, Rest} = parse_sse(NewBuffer),
-            lists:foreach(fun(EventData) ->
-                process_sse_event(EventData, Ref, Caller)
-            end, Events),
-            stream_loop(ClientRef, Ref, Caller, Rest);
+            handle_sse_chunk(Chunk, ClientRef, Ref, Caller, Buffer);
         {hackney_response, ClientRef, {error, Reason}} ->
             Caller ! {llm_error, Ref, Reason}
     after 120000 ->
@@ -343,45 +336,56 @@ stream_loop(ClientRef, Ref, Caller, Buffer) ->
         hackney:close(ClientRef)
     end.
 
+handle_sse_chunk(Chunk, ClientRef, Ref, Caller, Buffer) ->
+    NewBuffer = <<Buffer/binary, Chunk/binary>>,
+    {Events, Rest} = parse_sse(NewBuffer),
+    lists:foreach(fun(EventData) ->
+        process_sse_event(EventData, Ref, Caller)
+    end, Events),
+    stream_loop(ClientRef, Ref, Caller, Rest).
+
 process_sse_event(Data, Ref, Caller) ->
     try json:decode(Data) of
         #{<<"candidates">> := [Candidate | _]} = Resp ->
-            Content = maps:get(<<"content">>, Candidate, #{}),
-            Parts = maps:get(<<"parts">>, Content, []),
-            Text = extract_text(Parts),
-            ToolCalls = extract_function_calls(Parts),
-            FinishReason = maps:get(<<"finishReason">>, Candidate, null),
-            Done = FinishReason =/= null,
-            %% Use binary keys to match what hecate_api_llm expects
-            ChunkMap = #{<<"content">> => Text, <<"done">> => Done},
-            %% Add tool calls if present
-            ChunkMap1 = case ToolCalls of
-                [] -> ChunkMap;
-                _ -> ChunkMap#{<<"tool_calls">> => ToolCalls}
-            end,
-            %% Add stop reason if done
-            ChunkMap2 = case Done of
-                true when FinishReason =/= null ->
-                    ChunkMap1#{<<"stop_reason">> => FinishReason};
-                _ ->
-                    ChunkMap1
-            end,
-            FinalChunk = case Done of
-                true ->
-                    Usage = maps:get(<<"usageMetadata">>, Resp, #{}),
-                    ChunkMap2#{
-                        <<"eval_count">> => maps:get(<<"candidatesTokenCount">>, Usage, 0),
-                        <<"prompt_eval_count">> => maps:get(<<"promptTokenCount">>, Usage, 0)
-                    };
-                false ->
-                    ChunkMap2
-            end,
-            Caller ! {llm_chunk, Ref, FinalChunk};
+            emit_gemini_chunk(Candidate, Resp, Ref, Caller);
         _ ->
             ok
     catch _:_ ->
         ok
     end.
+
+emit_gemini_chunk(Candidate, Resp, Ref, Caller) ->
+    Content = maps:get(<<"content">>, Candidate, #{}),
+    Parts = maps:get(<<"parts">>, Content, []),
+    Text = extract_text(Parts),
+    ToolCalls = extract_function_calls(Parts),
+    FinishReason = maps:get(<<"finishReason">>, Candidate, null),
+    Done = FinishReason =/= null,
+    %% Use binary keys to match what hecate_api_llm expects
+    ChunkMap = #{<<"content">> => Text, <<"done">> => Done},
+    ChunkMap1 = merge_gemini_tool_calls(ChunkMap, ToolCalls),
+    ChunkMap2 = merge_gemini_finish_reason(ChunkMap1, Done, FinishReason),
+    FinalChunk = merge_gemini_usage(ChunkMap2, Done, Resp),
+    Caller ! {llm_chunk, Ref, FinalChunk}.
+
+%% Add tool calls if present
+merge_gemini_tool_calls(ChunkMap, [])        -> ChunkMap;
+merge_gemini_tool_calls(ChunkMap, ToolCalls) -> ChunkMap#{<<"tool_calls">> => ToolCalls}.
+
+%% Add stop reason if done
+merge_gemini_finish_reason(ChunkMap1, true, FinishReason) when FinishReason =/= null ->
+    ChunkMap1#{<<"stop_reason">> => FinishReason};
+merge_gemini_finish_reason(ChunkMap1, _Done, _FinishReason) ->
+    ChunkMap1.
+
+merge_gemini_usage(ChunkMap2, false, _Resp) ->
+    ChunkMap2;
+merge_gemini_usage(ChunkMap2, true, Resp) ->
+    Usage = maps:get(<<"usageMetadata">>, Resp, #{}),
+    ChunkMap2#{
+        <<"eval_count">> => maps:get(<<"candidatesTokenCount">>, Usage, 0),
+        <<"prompt_eval_count">> => maps:get(<<"promptTokenCount">>, Usage, 0)
+    }.
 
 parse_sse(Buffer) ->
     Lines = binary:split(Buffer, <<"\n">>, [global]),

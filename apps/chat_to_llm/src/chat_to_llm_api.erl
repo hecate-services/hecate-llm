@@ -42,22 +42,22 @@ init(Req0, State) ->
 
 handle_chat(Req0, State) ->
     case hecate_api_utils:read_json_body(Req0) of
-        {ok, Params, Req1} ->
-            Model = maps:get(<<"model">>, Params, undefined),
-            Messages = maps:get(<<"messages">>, Params, []),
-            Stream = maps:get(<<"stream">>, Params, false),
-
-            case validate_chat_params(Model, Messages) of
-                ok when Stream =:= true ->
-                    handle_streaming_chat(Req1, Model, Messages, Params, State);
-                ok ->
-                    handle_sync_chat(Req1, Model, Messages, Params, State);
-                {error, Reason} ->
-                    hecate_api_utils:bad_request(Reason, Req1)
-            end;
-        {error, invalid_json, Req1} ->
-            hecate_api_utils:bad_request(<<"Invalid JSON">>, Req1)
+        {ok, Params, Req1}       -> handle_parsed_chat(Params, Req1, State);
+        {error, invalid_json, Req1} -> hecate_api_utils:bad_request(<<"Invalid JSON">>, Req1)
     end.
+
+handle_parsed_chat(Params, Req1, State) ->
+    Model = maps:get(<<"model">>, Params, undefined),
+    Messages = maps:get(<<"messages">>, Params, []),
+    Stream = maps:get(<<"stream">>, Params, false),
+    dispatch_chat(validate_chat_params(Model, Messages), Stream, Req1, Model, Messages, Params, State).
+
+dispatch_chat(ok, true, Req1, Model, Messages, Params, State) ->
+    handle_streaming_chat(Req1, Model, Messages, Params, State);
+dispatch_chat(ok, _Stream, Req1, Model, Messages, Params, State) ->
+    handle_sync_chat(Req1, Model, Messages, Params, State);
+dispatch_chat({error, Reason}, _Stream, Req1, _Model, _Messages, _Params, _State) ->
+    hecate_api_utils:bad_request(Reason, Req1).
 
 %%% ===================================================================
 %%% Sync Chat
@@ -120,95 +120,7 @@ stream_chunks(Req, Ref) ->
 stream_chunks(Req, Ref, State) ->
     receive
         {llm_chunk, Ref, Chunk} ->
-            %% Ollama puts content inside "message", OpenAI at top level
-            Content = case maps:get(<<"message">>, Chunk, undefined) of
-                #{<<"content">> := C} -> C;
-                _ -> maps:get(<<"content">>, Chunk, <<>>)
-            end,
-            Done = maps:get(<<"done">>, Chunk, false),
-            StopReason = maps:get(<<"done_reason">>, Chunk, maps:get(<<"stop_reason">>, Chunk, undefined)),
-
-            %% Accumulate OpenAI/Groq tool_call_deltas into State
-            NewState = case maps:get(<<"tool_call_deltas">>, Chunk, undefined) of
-                undefined -> State;
-                Deltas when is_list(Deltas) ->
-                    lists:foldl(fun accumulate_tool_delta/2, State, Deltas)
-            end,
-
-            %% On Done with accumulated tool calls, emit them
-            {Event, FinalState} = case Done of
-                true ->
-                    PendingCalls = maps:get(pending_tool_calls, NewState, #{}),
-                    case maps:size(PendingCalls) of
-                        0 ->
-                            {#{content => Content, done => Done}, NewState};
-                        _ ->
-                            %% Build complete tool calls from accumulated deltas
-                            ToolCalls = build_pending_tool_calls(PendingCalls),
-                            Msg = #{
-                                role => <<"assistant">>,
-                                content => Content,
-                                tool_calls => ToolCalls
-                            },
-                            {#{content => Content, done => false, message => Msg},
-                             maps:remove(pending_tool_calls, NewState)}
-                    end;
-                false ->
-                    {#{content => Content, done => Done}, NewState}
-            end,
-
-            %% Handle complete tool calls in chunk (Ollama sends all at once)
-            Event1 = case maps:get(<<"tool_calls">>, Chunk, undefined) of
-                undefined -> Event;
-                ToolCalls2 when is_list(ToolCalls2) ->
-                    Msg2 = #{
-                        role => <<"assistant">>,
-                        content => Content,
-                        tool_calls => [format_tool_call(TC) || TC <- ToolCalls2]
-                    },
-                    Event#{message => Msg2}
-            end,
-
-            %% Add stop_reason if present
-            Event2 = case StopReason of
-                undefined -> Event1;
-                null -> Event1;
-                Reason -> Event1#{stop_reason => Reason}
-            end,
-
-            EventWithUsage = case Done of
-                true ->
-                    Event2#{
-                        model => maps:get(<<"model">>, Chunk, <<>>),
-                        usage => #{
-                            prompt_tokens => maps:get(<<"prompt_eval_count">>, Chunk, 0),
-                            completion_tokens => maps:get(<<"eval_count">>, Chunk, 0)
-                        }
-                    };
-                false ->
-                    Event2
-            end,
-            Data = iolist_to_binary(json:encode(EventWithUsage)),
-            cowboy_req:stream_body(<<"data: ", Data/binary, "\n\n">>, nofin, Req),
-
-            %% If we emitted accumulated tool calls, send a follow-up done event
-            case {Done, maps:is_key(message, Event)} of
-                {true, true} ->
-                    %% We emitted tool calls with done=false; now send the real done
-                    DoneEvent = #{
-                        content => <<>>, done => true,
-                        model => maps:get(<<"model">>, Chunk, <<>>),
-                        usage => #{
-                            prompt_tokens => maps:get(<<"prompt_eval_count">>, Chunk, 0),
-                            completion_tokens => maps:get(<<"eval_count">>, Chunk, 0)
-                        }
-                    },
-                    DoneData = iolist_to_binary(json:encode(DoneEvent)),
-                    cowboy_req:stream_body(<<"data: ", DoneData/binary, "\n\n">>, nofin, Req),
-                    stream_chunks(Req, Ref, FinalState);
-                _ ->
-                    stream_chunks(Req, Ref, FinalState)
-            end;
+            handle_llm_chunk(Chunk, Ref, Req, State);
 
         %% Tool use start (Anthropic streaming)
         {llm_tool_use_start, Ref, ToolInfo} ->
@@ -231,28 +143,7 @@ stream_chunks(Req, Ref, State) ->
         %% Content block stop (Anthropic streaming)
         {llm_content_block_stop, Ref} ->
             %% If we have a current tool, emit it as a complete tool_use
-            case maps:get(current_tool, State, undefined) of
-                undefined ->
-                    stream_chunks(Req, Ref, State);
-                Tool ->
-                    %% Get the accumulated input JSON and decode it to avoid double-encoding
-                    InputJson = maps:get(input, Tool, <<"{}">>),
-                    InputMap = try json:decode(InputJson) catch _:_ -> #{} end,
-                    ToolUse = #{
-                        id => maps:get(id, Tool, <<>>),
-                        name => maps:get(name, Tool, <<>>),
-                        arguments => InputMap
-                    },
-                    Event = #{
-                        done => false,
-                        content => <<>>,
-                        tool_use => ToolUse
-                    },
-                    Data = iolist_to_binary(json:encode(Event)),
-                    cowboy_req:stream_body(<<"data: ", Data/binary, "\n\n">>, nofin, Req),
-                    NewState = maps:remove(current_tool, State),
-                    stream_chunks(Req, Ref, NewState)
-            end;
+            emit_pending_tool_use(maps:get(current_tool, State, undefined), Req, Ref, State);
 
         {llm_done, Ref} ->
             cowboy_req:stream_body(<<"data: [DONE]\n\n">>, fin, Req),
@@ -273,6 +164,118 @@ stream_chunks(Req, Ref, State) ->
 %%% ===================================================================
 %%% Helpers
 %%% ===================================================================
+
+%% @doc Handle one streamed LLM chunk: build the SSE event, send it, and
+%% recurse with updated accumulator state.
+handle_llm_chunk(Chunk, Ref, Req, State) ->
+    Content = chunk_content(Chunk),
+    Done = maps:get(<<"done">>, Chunk, false),
+    StopReason = maps:get(<<"done_reason">>, Chunk, maps:get(<<"stop_reason">>, Chunk, undefined)),
+    NewState = accumulate_deltas(Chunk, State),
+    {Event, FinalState} = done_event(Done, Content, NewState),
+    Event1 = merge_complete_tool_calls(Event, Chunk, Content),
+    Event2 = merge_stop_reason(Event1, StopReason),
+    EventWithUsage = merge_usage(Event2, Chunk, Done),
+    send_event(Req, EventWithUsage),
+    maybe_send_followup_done(Done, Event, Chunk, Req, FinalState, Ref).
+
+%% Ollama puts content inside "message", OpenAI at top level.
+chunk_content(Chunk) ->
+    case maps:get(<<"message">>, Chunk, undefined) of
+        #{<<"content">> := C} -> C;
+        _ -> maps:get(<<"content">>, Chunk, <<>>)
+    end.
+
+%% Accumulate OpenAI/Groq tool_call_deltas into State.
+accumulate_deltas(Chunk, State) ->
+    case maps:get(<<"tool_call_deltas">>, Chunk, undefined) of
+        undefined -> State;
+        Deltas when is_list(Deltas) -> lists:foldl(fun accumulate_tool_delta/2, State, Deltas)
+    end.
+
+%% On Done with accumulated tool calls, emit them.
+done_event(false, Content, State) ->
+    {#{content => Content, done => false}, State};
+done_event(true, Content, State) ->
+    PendingCalls = maps:get(pending_tool_calls, State, #{}),
+    build_done_event(maps:size(PendingCalls), PendingCalls, Content, State).
+
+build_done_event(0, _PendingCalls, Content, State) ->
+    {#{content => Content, done => true}, State};
+build_done_event(_Count, PendingCalls, Content, State) ->
+    %% Build complete tool calls from accumulated deltas
+    ToolCalls = build_pending_tool_calls(PendingCalls),
+    Msg = #{role => <<"assistant">>, content => Content, tool_calls => ToolCalls},
+    {#{content => Content, done => false, message => Msg},
+     maps:remove(pending_tool_calls, State)}.
+
+%% Handle complete tool calls in chunk (Ollama sends all at once).
+merge_complete_tool_calls(Event, Chunk, Content) ->
+    case maps:get(<<"tool_calls">>, Chunk, undefined) of
+        undefined -> Event;
+        ToolCalls2 when is_list(ToolCalls2) ->
+            Msg2 = #{
+                role => <<"assistant">>,
+                content => Content,
+                tool_calls => [format_tool_call(TC) || TC <- ToolCalls2]
+            },
+            Event#{message => Msg2}
+    end.
+
+merge_stop_reason(Event, undefined) -> Event;
+merge_stop_reason(Event, null) -> Event;
+merge_stop_reason(Event, Reason) -> Event#{stop_reason => Reason}.
+
+merge_usage(Event, _Chunk, false) -> Event;
+merge_usage(Event, Chunk, true) -> Event#{model => maps:get(<<"model">>, Chunk, <<>>), usage => usage_from_chunk(Chunk)}.
+
+usage_from_chunk(Chunk) ->
+    #{
+        prompt_tokens => maps:get(<<"prompt_eval_count">>, Chunk, 0),
+        completion_tokens => maps:get(<<"eval_count">>, Chunk, 0)
+    }.
+
+send_event(Req, Event) ->
+    Data = iolist_to_binary(json:encode(Event)),
+    cowboy_req:stream_body(<<"data: ", Data/binary, "\n\n">>, nofin, Req).
+
+%% If we emitted accumulated tool calls, send a follow-up done event.
+maybe_send_followup_done(true, Event, Chunk, Req, FinalState, Ref) ->
+    send_followup_done(maps:is_key(message, Event), Chunk, Req, FinalState, Ref);
+maybe_send_followup_done(false, _Event, _Chunk, Req, FinalState, Ref) ->
+    stream_chunks(Req, Ref, FinalState).
+
+send_followup_done(true, Chunk, Req, FinalState, Ref) ->
+    %% We emitted tool calls with done=false; now send the real done
+    DoneEvent = #{
+        content => <<>>, done => true,
+        model => maps:get(<<"model">>, Chunk, <<>>),
+        usage => usage_from_chunk(Chunk)
+    },
+    send_event(Req, DoneEvent),
+    stream_chunks(Req, Ref, FinalState);
+send_followup_done(false, _Chunk, Req, FinalState, Ref) ->
+    stream_chunks(Req, Ref, FinalState).
+
+%% @doc Emit an accumulated Anthropic tool_use block, if one is pending.
+emit_pending_tool_use(undefined, Req, Ref, State) ->
+    stream_chunks(Req, Ref, State);
+emit_pending_tool_use(Tool, Req, Ref, State) ->
+    %% Get the accumulated input JSON and decode it to avoid double-encoding
+    InputJson = maps:get(input, Tool, <<"{}">>),
+    InputMap = decode_or_empty(InputJson),
+    ToolUse = #{
+        id => maps:get(id, Tool, <<>>),
+        name => maps:get(name, Tool, <<>>),
+        arguments => InputMap
+    },
+    Event = #{done => false, content => <<>>, tool_use => ToolUse},
+    send_event(Req, Event),
+    NewState = maps:remove(current_tool, State),
+    stream_chunks(Req, Ref, NewState).
+
+decode_or_empty(Json) ->
+    try json:decode(Json) catch _:_ -> #{} end.
 
 %% @doc Validate chat parameters.
 validate_chat_params(undefined, _Messages) ->
@@ -305,39 +308,39 @@ build_chat_opts(Model, Params) ->
 %% @doc Format messages from JSON to internal format.
 %% Preserves tool_calls (assistant requesting tools) and tool_call_id (tool results).
 format_messages(Messages) ->
-    lists:map(fun(M) ->
-        Base = #{
-            role => maps:get(<<"role">>, M, <<"user">>),
-            content => maps:get(<<"content">>, M, <<>>)
-        },
-        %% Preserve tool_calls for assistant messages (needed for tool calling flow)
-        Base1 = case maps:get(<<"tool_calls">>, M, undefined) of
-            undefined -> Base;
-            [] -> Base;
-            ToolCalls -> Base#{tool_calls => ToolCalls}
-        end,
-        %% Preserve tool_call_id for tool result messages
-        case maps:get(<<"tool_call_id">>, M, undefined) of
-            undefined -> Base1;
-            <<>> -> Base1;
-            ToolCallId -> Base1#{tool_call_id => ToolCallId}
-        end
-    end, Messages).
+    lists:map(fun format_one_message/1, Messages).
+
+format_one_message(M) ->
+    Base = #{
+        role => maps:get(<<"role">>, M, <<"user">>),
+        content => maps:get(<<"content">>, M, <<>>)
+    },
+    %% Preserve tool_calls for assistant messages (needed for tool calling flow)
+    Base1 = maybe_add_tool_calls(Base, maps:get(<<"tool_calls">>, M, undefined)),
+    %% Preserve tool_call_id for tool result messages
+    maybe_add_tool_call_id(Base1, maps:get(<<"tool_call_id">>, M, undefined)).
+
+maybe_add_tool_calls(Base, undefined)   -> Base;
+maybe_add_tool_calls(Base, [])          -> Base;
+maybe_add_tool_calls(Base, ToolCalls)   -> Base#{tool_calls => ToolCalls}.
+
+maybe_add_tool_call_id(Base, undefined)  -> Base;
+maybe_add_tool_call_id(Base, <<>>)       -> Base;
+maybe_add_tool_call_id(Base, ToolCallId) -> Base#{tool_call_id => ToolCallId}.
 
 %% @doc Format a tool call for JSON output.
 %% Decode arguments if they're a JSON string to avoid double-encoding.
 format_tool_call(#{id := Id, name := Name, arguments := Args}) ->
-    DecodedArgs = case is_binary(Args) of
-        true -> try json:decode(Args) catch _:_ -> #{} end;
-        false -> Args
-    end,
     #{
         id => Id,
         name => Name,
-        arguments => DecodedArgs
+        arguments => maybe_decode_args(Args)
     };
 format_tool_call(TC) ->
     TC.
+
+maybe_decode_args(Args) when is_binary(Args) -> decode_or_empty(Args);
+maybe_decode_args(Args) -> Args.
 
 %% @doc Accumulate an OpenAI/Groq tool call delta into State.
 %% Deltas arrive incrementally: first with id+name, then arguments_delta chunks.

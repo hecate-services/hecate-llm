@@ -5,6 +5,20 @@ Versioning: [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+- `rebar3 lint` (elvis) wired up for the first time in this repo's history
+  (`project_plugins`/`{elvis, ...}` in `rebar.config`, the same `macula_min`
+  ruleset — `no_deep_nesting` level 2, `no_nested_try_catch`,
+  `no_if_expression` — hecate-graph already uses), and the resulting 70
+  pre-existing `no_deep_nesting` findings across all 16 flagged modules
+  fixed in the same pass, not deferred to a separate cleanup. Every fix is
+  a pure extraction of a nested `case`/`try`/inline `fun` into a named
+  function (function clauses replacing the nested branch); no behavior
+  change. Verified via a clean `warnings_as_errors` compile (catches any
+  orphaned/unused extracted helper) and the full `hecate_llm_SUITE` after
+  every batch, plus a final `rebar3 lint` run showing zero findings
+  repo-wide.
+
 ### Fixed
 - `hecate-llm.check_health` faulted every real mesh call —
   `macula_peering`/`macula_station_link` logged "tuple at payload.ollama

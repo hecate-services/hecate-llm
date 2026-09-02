@@ -28,37 +28,39 @@ record_telemetry(Model, {ok, Response}, Opts) ->
                   maps:get(<<"prompt_eval_count">>, Response, 0)),
     TokensOut = maps:get(eval_count, Response,
                    maps:get(<<"eval_count">>, Response, 0)),
-    case TokensIn + TokensOut of
-        0 -> ok;
-        _ ->
-            TelemetryData = #{
-                model => Model,
-                tokens_in => TokensIn,
-                tokens_out => TokensOut,
-                venture_id => maps:get(venture_id, Opts, <<"default">>),
-                division_id => maps:get(division_id, Opts, undefined),
-                agent_id => maps:get(agent_id, Opts, undefined),
-                task_id => maps:get(task_id, Opts, undefined)
-            },
-            try
-                llm_pricing:record_llm_call(TelemetryData)
-            catch
-                error:undef -> ok;
-                _:_ -> ok
-            end
-    end;
+    maybe_record_telemetry(TokensIn + TokensOut, Model, TokensIn, TokensOut, Opts);
 record_telemetry(_Model, _Error, _Opts) ->
     ok.
+
+maybe_record_telemetry(0, _Model, _TokensIn, _TokensOut, _Opts) ->
+    ok;
+maybe_record_telemetry(_Total, Model, TokensIn, TokensOut, Opts) ->
+    TelemetryData = #{
+        model => Model,
+        tokens_in => TokensIn,
+        tokens_out => TokensOut,
+        venture_id => maps:get(venture_id, Opts, <<"default">>),
+        division_id => maps:get(division_id, Opts, undefined),
+        agent_id => maps:get(agent_id, Opts, undefined),
+        task_id => maps:get(task_id, Opts, undefined)
+    },
+    try
+        llm_pricing:record_llm_call(TelemetryData)
+    catch
+        error:undef -> ok;
+        _:_ -> ok
+    end.
 
 %% @doc Start a streaming chat completion.
 -spec chat_stream(binary(), list(), map()) -> {ok, reference()} | {error, term()}.
 chat_stream(Model, Messages, Opts) ->
     case manage_providers:provider_for_model(Model) of
-        {error, not_found} ->
-            {error, {unknown_model, Model}};
-        {Mod, Config} ->
-            Ref = make_ref(),
-            Caller = self(),
-            spawn_link(fun() -> Mod:chat_stream(Config, Model, Messages, Opts, Caller, Ref) end),
-            {ok, Ref}
+        {error, not_found} -> {error, {unknown_model, Model}};
+        {Mod, Config}      -> start_chat_stream(Mod, Config, Model, Messages, Opts)
     end.
+
+start_chat_stream(Mod, Config, Model, Messages, Opts) ->
+    Ref = make_ref(),
+    Caller = self(),
+    spawn_link(fun() -> Mod:chat_stream(Config, Model, Messages, Opts, Caller, Ref) end),
+    {ok, Ref}.

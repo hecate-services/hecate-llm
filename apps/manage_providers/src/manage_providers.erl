@@ -182,109 +182,120 @@ rebuild_cache(State, Now) ->
     {NewCache, NewState}.
 
 build_model_cache(Providers) ->
-    maps:fold(fun(ProviderName, #{type := Type, enabled := true} = Config, {CacheAcc, MetaAcc}) ->
-        Mod = llm_provider:provider_module(Type),
-        case Mod:list_models(Config) of
-            {ok, Models} ->
-                Validated = validate_models(Mod, Config, Models),
-                ProviderConfig = Config#{provider_name => ProviderName},
-                NewCache = lists:foldl(fun(#{name := ModelName}, InnerAcc) ->
-                    case maps:is_key(ModelName, InnerAcc) of
-                        true -> InnerAcc;
-                        false -> InnerAcc#{ModelName => {Mod, ProviderConfig}}
-                    end
-                end, CacheAcc, Validated),
-                NewMeta = [M#{provider => ProviderName} || M <- Validated],
-                {NewCache, MetaAcc ++ NewMeta};
-            {error, Reason} ->
-                logger:warning("[manage_providers] Failed to list models for ~s: ~p",
-                    [ProviderName, Reason]),
-                {CacheAcc, MetaAcc}
-        end;
-    (_ProviderName, _DisabledConfig, Acc) ->
-        Acc
-    end, {#{}, []}, Providers).
+    maps:fold(fun accumulate_model_cache/3, {#{}, []}, Providers).
+
+accumulate_model_cache(ProviderName, #{type := Type, enabled := true} = Config, {CacheAcc, MetaAcc}) ->
+    Mod = llm_provider:provider_module(Type),
+    add_provider_models(Mod, ProviderName, Config, CacheAcc, MetaAcc, Mod:list_models(Config));
+accumulate_model_cache(_ProviderName, _DisabledConfig, Acc) ->
+    Acc.
+
+add_provider_models(Mod, ProviderName, Config, CacheAcc, MetaAcc, {ok, Models}) ->
+    Validated = validate_models(Mod, Config, Models),
+    ProviderConfig = Config#{provider_name => ProviderName},
+    NewCache = lists:foldl(fun(ModelInfo, InnerAcc) ->
+        add_model_if_new(Mod, ProviderConfig, ModelInfo, InnerAcc)
+    end, CacheAcc, Validated),
+    NewMeta = [M#{provider => ProviderName} || M <- Validated],
+    {NewCache, MetaAcc ++ NewMeta};
+add_provider_models(_Mod, ProviderName, _Config, CacheAcc, MetaAcc, {error, Reason}) ->
+    logger:warning("[manage_providers] Failed to list models for ~s: ~p", [ProviderName, Reason]),
+    {CacheAcc, MetaAcc}.
+
+add_model_if_new(Mod, ProviderConfig, #{name := ModelName}, InnerAcc) ->
+    case maps:is_key(ModelName, InnerAcc) of
+        true  -> InnerAcc;
+        false -> InnerAcc#{ModelName => {Mod, ProviderConfig}}
+    end.
 
 validate_models(Mod, Config, Models) ->
     case erlang:function_exported(Mod, probe_model, 2) of
-        true ->
-            lists:filter(fun(#{name := Name}) ->
-                case Mod:probe_model(Config, Name) of
-                    ok ->
-                        true;
-                    {error, unauthorized} ->
-                        %% Bad API key — don't probe further, keep model in list
-                        %% so user sees it and can fix their key
-                        logger:warning("[manage_providers] Probe ~s: unauthorized (bad API key?)", [Name]),
-                        true;
-                    {error, Reason} ->
-                        logger:info("[manage_providers] Model ~s failed probe, excluding: ~p", [Name, Reason]),
-                        false
-                end
-            end, Models);
-        false ->
-            Models
+        true  -> filter_probed_models(Mod, Config, Models);
+        false -> Models
+    end.
+
+filter_probed_models(Mod, Config, Models) ->
+    lists:filter(fun(ModelInfo) -> model_passes_probe(Mod, Config, ModelInfo) end, Models).
+
+model_passes_probe(Mod, Config, #{name := Name}) ->
+    case Mod:probe_model(Config, Name) of
+        ok ->
+            true;
+        {error, unauthorized} ->
+            %% Bad API key — don't probe further, keep model in list
+            %% so user sees it and can fix their key
+            logger:warning("[manage_providers] Probe ~s: unauthorized (bad API key?)", [Name]),
+            true;
+        {error, Reason} ->
+            logger:info("[manage_providers] Model ~s failed probe, excluding: ~p", [Name, Reason]),
+            false
     end.
 
 load_providers() ->
     case file:read_file(?PROVIDERS_FILE) of
-        {ok, Data} ->
-            try
-                Decoded = json:decode(Data),
-                normalize_loaded_providers(Decoded)
-            catch _:_ ->
-                default_providers()
-            end;
-        {error, _} ->
-            default_providers()
+        {ok, Data} -> decode_providers_file(Data);
+        {error, _} -> default_providers()
+    end.
+
+decode_providers_file(Data) ->
+    try
+        Decoded = json:decode(Data),
+        normalize_loaded_providers(Decoded)
+    catch _:_ ->
+        default_providers()
     end.
 
 normalize_loaded_providers(Map) when is_map(Map) ->
-    Normalized = maps:map(fun(_Name, Config) ->
-        Type = case maps:get(<<"type">>, Config, maps:get(type, Config, <<"ollama">>)) of
-            B when is_binary(B) -> binary_to_existing_atom(B, utf8);
-            A when is_atom(A) -> A
-        end,
-        Url = maps:get(<<"url">>, Config, maps:get(url, Config, <<>>)),
-        ApiKey = maps:get(<<"api_key">>, Config, maps:get(api_key, Config, <<>>)),
-        Enabled = maps:get(<<"enabled">>, Config, maps:get(enabled, Config, true)),
-        Base = #{type => Type, enabled => Enabled},
-        Base1 = case Url of
-            <<>> -> Base;
-            _ -> Base#{url => binary_to_list(Url)}
-        end,
-        case ApiKey of
-            <<>> -> Base1;
-            _ -> Base1#{api_key => ApiKey}
-        end
-    end, Map),
-    %% Ensure ollama is always present
-    case maps:is_key(<<"ollama">>, Normalized) of
-        true -> Normalized;
-        false -> Normalized#{<<"ollama">> => default_ollama_config()}
-    end;
+    Normalized = maps:map(fun(_Name, Config) -> normalize_one_provider(Config) end, Map),
+    ensure_ollama_present(Normalized);
 normalize_loaded_providers(_) ->
     default_providers().
 
+normalize_one_provider(Config) ->
+    Type = normalize_type_field(maps:get(<<"type">>, Config, maps:get(type, Config, <<"ollama">>))),
+    Url = maps:get(<<"url">>, Config, maps:get(url, Config, <<>>)),
+    ApiKey = maps:get(<<"api_key">>, Config, maps:get(api_key, Config, <<>>)),
+    Enabled = maps:get(<<"enabled">>, Config, maps:get(enabled, Config, true)),
+    Base = #{type => Type, enabled => Enabled},
+    Base1 = maybe_add_url_str(Base, Url),
+    maybe_add_api_key(Base1, ApiKey).
+
+normalize_type_field(B) when is_binary(B) -> binary_to_existing_atom(B, utf8);
+normalize_type_field(A) when is_atom(A) -> A.
+
+maybe_add_url_str(Base, <<>>) -> Base;
+maybe_add_url_str(Base, Url)  -> Base#{url => binary_to_list(Url)}.
+
+maybe_add_api_key(Base1, <<>>)   -> Base1;
+maybe_add_api_key(Base1, ApiKey) -> Base1#{api_key => ApiKey}.
+
+%% Ensure ollama is always present
+ensure_ollama_present(Normalized) ->
+    case maps:is_key(<<"ollama">>, Normalized) of
+        true  -> Normalized;
+        false -> Normalized#{<<"ollama">> => default_ollama_config()}
+    end.
+
 persist_providers(Providers) ->
     %% Convert to JSON-friendly format
-    JsonMap = maps:map(fun(_Name, Config) ->
-        Type = maps:get(type, Config, ollama),
-        Base = #{<<"type">> => atom_to_binary(Type, utf8),
-                 <<"enabled">> => maps:get(enabled, Config, true)},
-        Base1 = case maps:get(url, Config, undefined) of
-            undefined -> Base;
-            Url when is_list(Url) -> Base#{<<"url">> => list_to_binary(Url)};
-            Url -> Base#{<<"url">> => Url}
-        end,
-        case maps:get(api_key, Config, undefined) of
-            undefined -> Base1;
-            Key -> Base1#{<<"api_key">> => Key}
-        end
-    end, Providers),
+    JsonMap = maps:map(fun(_Name, Config) -> provider_to_json(Config) end, Providers),
     Data = json:encode(JsonMap),
     filelib:ensure_dir(?PROVIDERS_FILE),
     file:write_file(?PROVIDERS_FILE, Data).
+
+provider_to_json(Config) ->
+    Type = maps:get(type, Config, ollama),
+    Base = #{<<"type">> => atom_to_binary(Type, utf8),
+             <<"enabled">> => maps:get(enabled, Config, true)},
+    Base1 = maybe_add_json_url(Base, maps:get(url, Config, undefined)),
+    maybe_add_json_api_key(Base1, maps:get(api_key, Config, undefined)).
+
+maybe_add_json_url(Base, undefined)             -> Base;
+maybe_add_json_url(Base, Url) when is_list(Url) -> Base#{<<"url">> => list_to_binary(Url)};
+maybe_add_json_url(Base, Url)                   -> Base#{<<"url">> => Url}.
+
+maybe_add_json_api_key(Base1, undefined) -> Base1;
+maybe_add_json_api_key(Base1, Key)       -> Base1#{<<"api_key">> => Key}.
 
 default_providers() ->
     #{<<"ollama">> => default_ollama_config()}.
@@ -329,22 +340,23 @@ auto_detect_env_providers(Providers) ->
         %% key in this fleet's default deploy secrets.
         {<<"melious">>, "MELIOUS_API_KEY", openai, "https://api.melious.ai"}
     ],
-    lists:foldl(fun({Name, EnvVar, Type, Url}, Acc) ->
-        case {maps:is_key(Name, Acc), os:getenv(EnvVar)} of
-            {true, _} ->
-                %% Already configured, skip
-                Acc;
-            {false, false} ->
-                %% Env var not set, skip
-                Acc;
-            {false, ApiKey} ->
-                %% Env var set, add provider
-                logger:info("[manage_providers] Auto-detected ~s from ~s", [Name, EnvVar]),
-                Acc#{Name => #{
-                    type => Type,
-                    url => Url,
-                    api_key => list_to_binary(ApiKey),
-                    enabled => true
-                }}
-        end
-    end, Providers, EnvProviders).
+    lists:foldl(fun maybe_add_env_provider/2, Providers, EnvProviders).
+
+maybe_add_env_provider({Name, EnvVar, Type, Url}, Acc) ->
+    case {maps:is_key(Name, Acc), os:getenv(EnvVar)} of
+        {true, _} ->
+            %% Already configured, skip
+            Acc;
+        {false, false} ->
+            %% Env var not set, skip
+            Acc;
+        {false, ApiKey} ->
+            %% Env var set, add provider
+            logger:info("[manage_providers] Auto-detected ~s from ~s", [Name, EnvVar]),
+            Acc#{Name => #{
+                type => Type,
+                url => Url,
+                api_key => list_to_binary(ApiKey),
+                enabled => true
+            }}
+    end.

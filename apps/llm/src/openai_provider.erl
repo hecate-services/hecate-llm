@@ -294,27 +294,27 @@ stream_loop(ClientRef, Ref, Caller, Buffer) ->
         {hackney_response, ClientRef, done} ->
             Caller ! {llm_done, Ref};
         {hackney_response, ClientRef, Chunk} when is_binary(Chunk) ->
-            NewBuffer = <<Buffer/binary, Chunk/binary>>,
-            {Events, Rest} = parse_sse(NewBuffer),
-            lists:foreach(fun(EventData) ->
-                case EventData of
-                    <<"[DONE]">> ->
-                        Caller ! {llm_done, Ref};
-                    _ ->
-                        try json:decode(EventData) of
-                            Decoded ->
-                                Caller ! {llm_chunk, Ref, normalize_stream_chunk(Decoded)}
-                        catch _:_ ->
-                            ok
-                        end
-                end
-            end, Events),
-            stream_loop(ClientRef, Ref, Caller, Rest);
+            handle_openai_sse_chunk(Chunk, ClientRef, Ref, Caller, Buffer);
         {hackney_response, ClientRef, {error, Reason}} ->
             Caller ! {llm_error, Ref, Reason}
     after 120000 ->
         Caller ! {llm_error, Ref, timeout},
         hackney:close(ClientRef)
+    end.
+
+handle_openai_sse_chunk(Chunk, ClientRef, Ref, Caller, Buffer) ->
+    NewBuffer = <<Buffer/binary, Chunk/binary>>,
+    {Events, Rest} = parse_sse(NewBuffer),
+    lists:foreach(fun(EventData) -> process_openai_event(EventData, Ref, Caller) end, Events),
+    stream_loop(ClientRef, Ref, Caller, Rest).
+
+process_openai_event(<<"[DONE]">>, Ref, Caller) ->
+    Caller ! {llm_done, Ref};
+process_openai_event(EventData, Ref, Caller) ->
+    try json:decode(EventData) of
+        Decoded -> Caller ! {llm_chunk, Ref, normalize_stream_chunk(Decoded)}
+    catch _:_ ->
+        ok
     end.
 
 normalize_stream_chunk(#{<<"choices">> := [Choice | _]} = Resp) ->
