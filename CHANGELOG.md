@@ -5,6 +5,31 @@ Versioning: [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- `hecate-llm.chat` answered `missing_model_or_messages` to every mesh
+  caller: `hecate_llm_mesh_rpc:route/2` matched bare binary keys, and
+  macula's decoder hands a responder atomized keys and `{text, Bin}`
+  values (verified live 2026-09-03 from inside a spartan mind, with
+  binary and with atom keys). Every payload is now folded to one shape
+  before routing; regression test covers all three wire shapes.
+- `hecate-llm.list_available` faulted on the wire ("tuple at payload
+  cannot be encoded"): the route wrapped `list/0`'s own `{ok, Models}`
+  in a second `{ok, _}`.
+- Chat options were read atom-keyed by the providers and passed
+  binary-keyed by the route, so `temperature`/`max_tokens`/`tools` from
+  a mesh caller were silently ignored.
+
+### Added
+- A fallback provider for unary `chat` (`HECATE_LLM_FALLBACK_PROVIDER`,
+  `HECATE_LLM_FALLBACK_MODEL`, default `deepseek`/`deepseek-chat`): when
+  the model's own provider fails for a reason that is the provider's
+  (429, 5xx, timeout, refused connection, stale key, unlisted model), the
+  call is made once more against the fallback and the reply carries
+  `served_by` and `requested_model`. The switch, and a fallback that is
+  named but not keyed, are logged. NVIDIA's free endpoint answered 429 to
+  everything for a day (2026-09-02/03) and this gateway, holding only an
+  NVIDIA key, failed silently throughout.
+
 ### Changed
 - `rebar3 lint` (elvis) wired up for the first time in this repo's history
   (`project_plugins`/`{elvis, ...}` in `rebar.config`, the same `macula_min`

@@ -56,15 +56,42 @@ Substrate: [`hecate-om`](https://github.com/hecate-services/hecate-om).
 
 ## Providers
 
-Four supported, all sharing the `llm_provider` behavior:
+Providers share the `llm_provider` behaviour (`anthropic_provider`,
+`openai_provider`, `google_provider`, `ollama_provider`) and are detected
+at boot from the environment: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`,
+`GOOGLE_API_KEY`/`GEMINI_API_KEY`, `GROQ_API_KEY`, `NVIDIA_API_KEY`,
+`DEEPSEEK_API_KEY`, `MELIOUS_API_KEY`. The model a caller names picks the
+provider: `moonshotai/kimi-k3` goes to NVIDIA, `deepseek-chat` to
+DeepSeek. Keys live in the node's secret file (on the fleet,
+`~/.hecate/secrets/llm-providers.env`), never in this repo.
 
-- `anthropic_provider` (Claude)
-- `openai_provider` (GPT-*)
-- `google_provider` (Gemini)
-- `ollama_provider` (local models)
+### Fallback
 
-API keys live in `/etc/hecate/secrets/hecate-llm/providers.env`
-mounted by the Quadlet, never in the realm-cert directory.
+When the provider a model resolves to cannot answer (rate limit, 5xx,
+timeout, refused connection, stale key, or the model missing from a
+listing that was itself rate-limited), unary `chat` is retried once
+against a fallback provider with a fallback model, and the reply carries
+`served_by` and `requested_model` so the caller can tell. The switch is
+logged. A 400 or 422 is the request's own fault and is not retried.
+
+| Variable | Default | Meaning |
+|----------|---------|---------|
+| `HECATE_LLM_FALLBACK_PROVIDER` | `deepseek` | provider name as detected above; `none` disables |
+| `HECATE_LLM_FALLBACK_MODEL` | `deepseek-chat` | model asked of the fallback provider |
+
+The fallback provider needs its own key in the environment like any
+other; a fallback named but not keyed is logged on every failed call.
+`stream_chat` does not fall back: a stream has committed to its provider
+before that provider can fail.
+
+### Wire shapes
+
+Mesh payloads arrive with keys atomized by macula's decoder and text
+values tagged `{text, Bin}`. `hecate_llm_mesh_rpc` folds every payload
+to binary keys and plain values before routing, so `model`, `messages`,
+`opts.temperature`, `opts.max_tokens` and `opts.tools` are read whatever
+shape the caller's SDK produced. `max_tokens` and `temperature` are also
+accepted beside `model` at the top level.
 
 ## Deps
 

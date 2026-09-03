@@ -79,42 +79,93 @@ handle_track_usage(P)    -> route(<<"hecate-llm.track_usage">>, P).
 
 %%% Internal: method → slice handler
 
-route(<<"hecate-llm.chat">>, #{<<"model">> := Model, <<"messages">> := Messages} = P) ->
-    Opts = maps:get(<<"opts">>, P, #{}),
-    case chat_to_llm:chat(Model, Messages, Opts) of
-        {ok, Reply}        -> {ok, Reply};
-        {error, _} = Err   -> Err
-    end;
-route(<<"hecate-llm.chat">>, _P) ->
+%% Every payload is folded to one shape before any clause looks at it.
+%% macula's frame decoder atomizes a payload's keys through
+%% binary_to_existing_atom/1 (so `<<"model">>' arrives as `model'), a
+%% key whose atom does not exist arrives as `{text, <<"...">>}', and
+%% every text VALUE arrives as `{text, Bin}' (see hecate_om_wire's
+%% moduledoc for both gotchas). The clauses below used to match bare
+%% binary keys only, which no real mesh caller ever produced: every
+%% `hecate-llm.chat' call answered `missing_model_or_messages' from
+%% the day the wire started tagging text, verified live 2026-09-03
+%% from inside a spartan mind with binary AND atom keys.
+%% hecate_om_wire:field/2,3 solves this for one top-level key; a chat
+%% payload nests maps (messages, opts, tools), so the whole tree is
+%% folded here instead and the binary-key matches stay honest.
+route(Method, Params) when is_map(Params) ->
+    serve(Method, wire_in(Params));
+route(Method, _NotAMap) ->
+    serve(Method, #{}).
+
+serve(<<"hecate-llm.chat">>, #{<<"model">> := Model, <<"messages">> := Messages} = P) ->
+    chat_to_llm:chat(Model, Messages, chat_opts(P));
+serve(<<"hecate-llm.chat">>, _P) ->
     {error, missing_model_or_messages};
 
-route(<<"hecate-llm.list_available">>, _P) ->
-    %% Returns the list of detected models. `list/0' is stateless +
-    %% reads from the manage_providers / detect_llms ETS table.
+serve(<<"hecate-llm.list_available">>, _P) ->
+    %% `list/0' already answers `{ok, Models}'; wrapping that in another
+    %% `{ok, _}' put a bare tuple on the wire, which macula_frame refuses
+    %% ("tuple at payload cannot be encoded") and the whole call faulted.
     case erlang:function_exported(get_available_llms_page, list, 0) of
-        true  -> {ok, get_available_llms_page:list()};
+        true  -> wire_safe_models(get_available_llms_page:list());
         false -> {error, not_implemented}
     end;
 
-route(<<"hecate-llm.check_health">>, _P) ->
+serve(<<"hecate-llm.check_health">>, _P) ->
     case erlang:function_exported(check_llm_health, check_all, 0) of
         true  -> {ok, wire_safe_health(check_llm_health:check_all())};
         false -> {error, not_implemented}
     end;
 
-route(<<"hecate-llm.report_status">>, _P) ->
+serve(<<"hecate-llm.report_status">>, _P) ->
     %% report_llm_status is a gen_server; whatever introspection
     %% function we expose lands here. Today: stub.
     {ok, #{status => <<"todo">>}};
 
-route(<<"hecate-llm.track_usage">>, P) ->
+serve(<<"hecate-llm.track_usage">>, P) ->
     case track_llm_call_v1:from_map(P) of
         {ok, Cmd}      -> dispatch_track_usage(Cmd);
         {error, _} = E -> E
     end;
 
-route(Other, _P) ->
+serve(Other, _P) ->
     {error, {unknown_method, Other}}.
+
+%% The provider modules read their options atom-keyed (`temperature',
+%% `max_tokens', `tools' -- see openai_provider:build_request/4). A
+%% caller may put them under `opts' or beside `model' at the top level,
+%% and after wire_in/1 both arrive binary-keyed; this is the one place
+%% they are translated.
+chat_opts(P) ->
+    Nested = maps:get(<<"opts">>, P, #{}),
+    lists:foldl(fun(Key, Acc) -> chat_opt(Key, P, Nested, Acc) end, #{},
+                [temperature, max_tokens, tools]).
+
+chat_opt(Key, P, Nested, Acc) ->
+    Bin = atom_to_binary(Key, utf8),
+    case maps:get(Bin, Nested, maps:get(Bin, P, undefined)) of
+        undefined -> Acc;
+        Value     -> Acc#{Key => Value}
+    end.
+
+wire_in(Map) when is_map(Map) ->
+    maps:fold(fun(K, V, Acc) -> Acc#{wire_key(K) => wire_in(V)} end, #{}, Map);
+wire_in(List) when is_list(List) ->
+    [wire_in(V) || V <- List];
+wire_in(Value) ->
+    hecate_om_wire:unwrap(Value).
+
+wire_key({text, Bin}) when is_binary(Bin) -> Bin;
+wire_key(Atom) when is_atom(Atom)          -> atom_to_binary(Atom, utf8);
+wire_key(Other)                            -> Other.
+
+wire_safe_models({ok, Models}) when is_list(Models) ->
+    {ok, [maps:map(fun(_K, V) -> wire_safe_value(V) end, M) || M <- Models, is_map(M)]};
+wire_safe_models({error, _} = Err) ->
+    Err.
+
+wire_safe_value(V) when is_binary(V); is_integer(V); is_float(V); is_atom(V) -> V;
+wire_safe_value(V) -> iolist_to_binary(io_lib:format("~p", [V])).
 
 dispatch_track_usage(Cmd) ->
     case maybe_track_llm_call:dispatch(Cmd) of
